@@ -11,7 +11,6 @@ const CURSOR_API_BASE = "https://api.cursor.com/v0";
 const CURSOR_API_KEY = process.env.CURSOR_API_KEY;
 const GITHUB_REPOSITORY = process.env.GITHUB_REPOSITORY;
 const GITHUB_REF = process.env.GITHUB_REF || "main";
-console.log(CURSOR_API_KEY, GITHUB_REPOSITORY, GITHUB_REF);
 
 interface ComponentDefinition {
   name: string;
@@ -232,7 +231,7 @@ describe("${pascalName}", () => {
     expect(webComponent.exists()).toBe(true);
   });
 
-  // Add event tests for each event
+  // Add event tests for each event and prop
 });
 \`\`\`
 
@@ -341,9 +340,10 @@ async function pollAgentCompletion(agentId: string): Promise<string> {
     }
 
     const result = await response.json();
+    console.log(`Agent ${agentId} | status: ${result.status}`);
 
     // Check agent status
-    if (result.status === "completed" || result.status === "success") {
+    if (result.status === "FINISHED") {
       // Get the conversation to extract the agent's response
       const conversationResponse = await fetchWithRetry(
         `${CURSOR_API_BASE}/agents/${agentId}/conversation`,
@@ -379,7 +379,7 @@ async function pollAgentCompletion(agentId: string): Promise<string> {
       throw new Error("Agent task was cancelled");
     }
 
-    // Status is still "running" or "pending", continue polling
+    // Status is still "RUNNING" or "PENDING", continue polling
     if (i % 6 === 0) {
       // Log every 30 seconds
       console.log(
@@ -410,7 +410,6 @@ async function saveComponent(
 
   // Create directory structure
   await mkdir(componentDir, { recursive: true });
-  await mkdir(join(componentDir, "tests"), { recursive: true });
 
   // Save index.vue
   await writeFile(join(componentDir, "index.vue"), generated.vueComponent);
@@ -423,11 +422,11 @@ async function saveComponent(
 
   // Save test file
   await writeFile(
-    join(componentDir, "tests", `${pascalName}.test.ts`),
+    join(componentDir, `${pascalName}.test.ts`),
     generated.testFile
   );
 
-  console.log(`  ✓ Generated ${pascalName} component`);
+  console.log(`✓ Generated ${pascalName} component`);
 }
 
 /**
