@@ -2,14 +2,16 @@
 
 This document outlines how the Polaris Vue component generator could be enhanced with Cursor's Agent API for intelligent, AI-powered component generation and maintenance.
 
-## Current Implementation
+## Current Implementation Status
 
-The current `scripts/generate-components.ts` is a standalone TypeScript script that:
+✅ **The project already uses Cursor's Background Agent API** for component generation via `scripts/generate-components.ts`. See `scripts/API_NOTES.md` for full implementation details.
+
+The current implementation:
 
 - Fetches Polaris Web Components documentation
-- Parses markdown tables for props and events
-- Generates Vue components using string templates
-- Creates basic test files
+- Uses Cursor's Background Agent API for intelligent parsing
+- Generates Vue components with AI-powered type inference
+- Creates comprehensive test files
 
 ## Cursor Agent API Enhancement Opportunities
 

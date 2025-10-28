@@ -2,7 +2,7 @@
 
 ## Current Implementation Status
 
-✅ The `generate-components.ts` script has been **updated to use the official Cursor Background Agents API** endpoints as documented in the [official API documentation](https://docs.cursor.com/context/api-keys).
+✅ The `generate-components.ts` script has been **updated to use the official v0 Cursor Background Agents API** endpoints as documented in the [official API documentation](https://docs.cursor.com/context/api-keys).
 
 ## API Endpoints Used
 
@@ -66,10 +66,12 @@ Response:
 ```typescript
 {
   id: string,
-  status: "pending" | "running" | "completed" | "success" | "failed" | "error" | "cancelled",
+  status: "PENDING" | "RUNNING" | "FINISHED" | "FAILED" | "CANCELLED",
   error?: string  // If failed
 }
 ```
+
+**Note**: The actual API may return status values in uppercase format. Verify the exact status strings returned by the API during testing.
 
 ### 4. Get Agent Conversation
 
@@ -139,13 +141,25 @@ Get your API key from: https://cursor.com/settings
 
 ## Rate Limiting
 
-The API implements rate limiting. When exceeding limits, returns `429 Too Many Requests`.
+### API Rate Limits
 
-The script automatically handles this with:
+The Cursor API implements rate limiting. When exceeding limits, it returns `429 Too Many Requests`.
+
+### Proactive Rate Limiting
+
+**The script now implements proactive rate limiting at 20 requests per minute** to prevent hitting API limits:
+
+- **Sliding window**: Tracks all requests in a 60-second rolling window
+- **Automatic throttling**: Waits automatically when approaching the 20 req/min limit
+- **Applies to all Cursor API calls**: Including verification, agent creation, status polling, and result fetching
+
+### Reactive Rate Limiting
+
+If the API still returns 429 (rate limit exceeded), the script also handles this reactively with:
 
 - Exponential backoff
 - `Retry-After` header support
-- Maximum 3 retry attempts
+- Maximum 3 retry attempts per request
 
 ## Response Codes
 
@@ -179,10 +193,11 @@ The script automatically handles this with:
    - Checks every 5 seconds
    - Maximum 10 minutes (120 attempts)
    - Logs progress every 30 seconds
+   - Waits for status `FINISHED` (uppercase)
 
 4. **Get Results** (`GET /v0/agents/{id}/conversation`)
 
-   - When status is `completed` or `success`
+   - When status is `FINISHED`
    - Extracts last assistant message
    - Parses JSON response
 
@@ -255,6 +270,8 @@ console.log("Response:", await response.text());
 2. **Polling Interval**
 
    - 5 seconds between status checks
+   - Subject to rate limiting (20 requests per minute)
+   - May take longer when rate limit is approached
    - May be adjusted based on typical completion times
 
 3. **Timeout**
@@ -264,6 +281,8 @@ console.log("Response:", await response.text());
 
 4. **Rate Limits**
    - Background agents have rate limits
+   - Script implements proactive rate limiting: **20 requests per minute**
+   - Automatically throttles requests to stay within limits
    - Script processes components sequentially to avoid hitting limits
 
 ## Resources

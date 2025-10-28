@@ -44,14 +44,16 @@ src/components/
             └── S[ComponentName].test.ts
 ```
 
-### ✅ Example Component
+### ✅ Component Examples
 
-`SButton` is fully set up as an example:
+After running the generator, components will be created following this pattern:
 
-- Located at: `src/components/actions/SButton/`
-- Has full TypeScript types
-- Has 5 passing tests
-- Used in `src/App.vue`
+- Location: `src/components/[category]/S[ComponentName]/`
+- Full TypeScript types for all props and events
+- Comprehensive Vitest tests
+- Ready to use in your application
+
+**Note**: Run `bun run generate` to create the components first.
 
 ### ✅ Custom Element Configuration
 
@@ -185,13 +187,13 @@ import STextField from "@/components/forms/STextField/index.vue";
 
 2. Create `index.vue`:
 
-   - Follow the pattern in `SButton/index.vue`
+   - Follow the pattern used in generated components
    - Add TypeScript types
    - Forward events
 
 3. Create test file:
 
-   - Follow the pattern in `SButton/tests/SButton.test.ts`
+   - Follow the pattern used in generated components
    - Test props, events, and rendering
 
 4. Run tests:
@@ -296,4 +298,4 @@ import SButton from "@/components/actions/SButton.vue";
 
 ## Questions?
 
-Check the documentation files listed above, or review the example `SButton` component to understand the pattern.
+Check the documentation files listed above. After generating components, review any generated component to understand the pattern.

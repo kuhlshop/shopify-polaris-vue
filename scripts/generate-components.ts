@@ -12,16 +12,17 @@ const CURSOR_API_KEY = process.env.CURSOR_API_KEY;
 const GITHUB_REPOSITORY = process.env.GITHUB_REPOSITORY;
 const GITHUB_REF = process.env.GITHUB_REF || "main";
 
+// Parse command line arguments
+const args = process.argv.slice(2);
+const componentsFilter = args
+  .find((arg) => arg.startsWith("--components="))
+  ?.split("=")[1];
+
 interface ComponentDefinition {
   name: string;
   category: string;
   url: string;
   markdownUrl: string;
-}
-
-interface AgentTaskResult {
-  vueComponent: string;
-  testFile: string;
 }
 
 /**
@@ -32,9 +33,77 @@ async function sleep(ms: number): Promise<void> {
 }
 
 /**
- * Fetch with retry logic for rate limiting
+ * Rate limiter to ensure we don't exceed API rate limits
  *
- * Automatically handles 429 (Rate Limit Exceeded) responses by:
+ * Implements a sliding window rate limiter that tracks all requests
+ * and enforces a maximum number of requests per time window.
+ */
+class RateLimiter {
+  private requestTimestamps: number[] = [];
+  private maxRequests: number;
+  private windowMs: number;
+
+  /**
+   * @param maxRequests - Maximum number of requests allowed in the time window
+   * @param windowMs - Time window in milliseconds (default: 60000ms = 1 minute)
+   */
+  constructor(maxRequests: number, windowMs: number = 60000) {
+    this.maxRequests = maxRequests;
+    this.windowMs = windowMs;
+  }
+
+  /**
+   * Wait until a request can be made without exceeding the rate limit
+   */
+  async waitForSlot(): Promise<void> {
+    const now = Date.now();
+
+    // Remove timestamps outside the current window
+    this.requestTimestamps = this.requestTimestamps.filter(
+      (timestamp) => now - timestamp < this.windowMs
+    );
+
+    // If we're at the limit, wait until the oldest request expires
+    if (this.requestTimestamps.length >= this.maxRequests) {
+      const oldestRequest = this.requestTimestamps[0];
+      const waitTime = this.windowMs - (now - oldestRequest) + 100; // Add 100ms buffer
+
+      console.log(
+        `  ⏱️  Rate limit: ${this.requestTimestamps.length}/${
+          this.maxRequests
+        } requests in window. Waiting ${Math.ceil(waitTime / 1000)}s...`
+      );
+
+      await sleep(waitTime);
+
+      // Recursively check again after waiting
+      return this.waitForSlot();
+    }
+
+    // Record this request
+    this.requestTimestamps.push(Date.now());
+  }
+
+  /**
+   * Get current request count in the window
+   */
+  getRequestCount(): number {
+    const now = Date.now();
+    this.requestTimestamps = this.requestTimestamps.filter(
+      (timestamp) => now - timestamp < this.windowMs
+    );
+    return this.requestTimestamps.length;
+  }
+}
+
+// Create a global rate limiter for Cursor API calls: 20 requests per minute
+const cursorApiRateLimiter = new RateLimiter(20, 60000);
+
+/**
+ * Fetch with retry logic and proactive rate limiting
+ *
+ * For Cursor API calls, enforces a rate limit of 20 requests per minute.
+ * Also handles 429 (Rate Limit Exceeded) responses by:
  * - Checking the Retry-After header if present
  * - Using exponential backoff if no header
  * - Retrying up to maxRetries times
@@ -50,7 +119,15 @@ async function fetchWithRetry(
   options: RequestInit,
   maxRetries = 3
 ): Promise<Response> {
+  // Check if this is a Cursor API call and apply rate limiting
+  const isCursorApi = url.startsWith(CURSOR_API_BASE);
+
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    // Wait for rate limiter before making Cursor API calls
+    if (isCursorApi) {
+      await cursorApiRateLimiter.waitForSlot();
+    }
+
     const response = await fetch(url, options);
 
     // If rate limited, wait and retry
@@ -61,7 +138,7 @@ async function fetchWithRetry(
         : Math.pow(2, attempt) * 1000; // Exponential backoff
 
       console.log(
-        `  ⚠️  Rate limited. Waiting ${waitTime / 1000}s before retry...`
+        `  ⚠️  Rate limited by API. Waiting ${waitTime / 1000}s before retry...`
       );
       await sleep(waitTime);
       continue;
@@ -122,9 +199,7 @@ async function fetchComponentMarkdown(url: string): Promise<string> {
  * This function:
  * 1. Creates a detailed prompt with component requirements
  * 2. Launches a background agent via POST /v0/agents
- * 3. Polls the agent status via GET /v0/agents/{id}
- * 4. Retrieves the results from GET /v0/agents/{id}/conversation
- * 5. Parses the agent's JSON response
+ * 3. Returns the agent ID immediately without waiting for completion
  *
  * @see https://docs.cursor.com/context/api-keys
  */
@@ -132,7 +207,7 @@ async function generateWithCursorAgent(
   componentName: string,
   category: string,
   markdown: string
-): Promise<AgentTaskResult> {
+): Promise<string> {
   if (!CURSOR_API_KEY) {
     throw new Error(
       "CURSOR_API_KEY environment variable is not set. Please set it to use the Cursor Agent API."
@@ -288,145 +363,12 @@ Do not include any markdown code fences or additional formatting in the JSON val
       throw new Error("No agent ID returned from API");
     }
 
-    console.log(`  → Agent ${result.id} created, waiting for completion...`);
-
-    // Poll for completion
-    const agentResponse = await pollAgentCompletion(result.id);
-
-    // Parse the agent's JSON response
-    const parsed = JSON.parse(agentResponse);
-
-    return {
-      vueComponent: parsed.vueComponent,
-      testFile: parsed.testFile,
-    };
+    console.log(`  ✓ Agent ${result.id} launched`);
+    return result.id;
   } catch (error) {
-    console.error(`  ✗ Failed to generate with Cursor agent:`, error);
+    console.error(`  ✗ Failed to launch Cursor agent:`, error);
     throw error;
   }
-}
-
-/**
- * Poll for agent completion using the Background Agents API
- *
- * Continuously checks the agent status until it completes, fails, or times out.
- * When completed, fetches the conversation to extract the agent's response.
- *
- * Status values:
- * - pending/running: Agent is still working
- * - completed/success: Agent finished successfully
- * - failed/error: Agent encountered an error
- * - cancelled: Agent was cancelled
- *
- * @param agentId - The ID returned from POST /v0/agents
- * @returns The agent's response text (should be JSON)
- */
-async function pollAgentCompletion(agentId: string): Promise<string> {
-  const maxAttempts = 120; // 10 minutes max
-  const pollInterval = 5000; // 5 seconds
-
-  for (let i = 0; i < maxAttempts; i++) {
-    const response = await fetchWithRetry(
-      `${CURSOR_API_BASE}/agents/${agentId}`,
-      {
-        headers: {
-          Authorization: `Bearer ${CURSOR_API_KEY}`,
-        },
-      }
-    );
-
-    if (!response.ok) {
-      throw new Error(`Failed to poll agent status: ${response.statusText}`);
-    }
-
-    const result = await response.json();
-    console.log(`Agent ${agentId} | status: ${result.status}`);
-
-    // Check agent status
-    if (result.status === "FINISHED") {
-      // Get the conversation to extract the agent's response
-      const conversationResponse = await fetchWithRetry(
-        `${CURSOR_API_BASE}/agents/${agentId}/conversation`,
-        {
-          headers: {
-            Authorization: `Bearer ${CURSOR_API_KEY}`,
-          },
-        }
-      );
-
-      if (!conversationResponse.ok) {
-        throw new Error(
-          `Failed to fetch conversation: ${conversationResponse.statusText}`
-        );
-      }
-
-      const conversation = await conversationResponse.json();
-
-      // Extract the last assistant message from the conversation
-      // The conversation format may vary, adjust based on actual API response
-      const lastMessage = conversation.messages?.findLast(
-        (msg: any) => msg.role === "assistant"
-      );
-
-      if (!lastMessage || !lastMessage.content) {
-        throw new Error("No response found in conversation");
-      }
-
-      return lastMessage.content;
-    } else if (result.status === "failed" || result.status === "error") {
-      throw new Error(`Agent task failed: ${result.error || "Unknown error"}`);
-    } else if (result.status === "cancelled") {
-      throw new Error("Agent task was cancelled");
-    }
-
-    // Status is still "RUNNING" or "PENDING", continue polling
-    if (i % 6 === 0) {
-      // Log every 30 seconds
-      console.log(
-        `  → Still waiting... (${Math.floor(
-          (i * pollInterval) / 1000
-        )}s elapsed)`
-      );
-    }
-
-    // Wait before polling again
-    await sleep(pollInterval);
-  }
-
-  throw new Error("Agent task timed out after 10 minutes");
-}
-
-/**
- * Save component files to disk
- */
-async function saveComponent(
-  componentName: string,
-  category: string,
-  markdown: string,
-  generated: AgentTaskResult
-): Promise<void> {
-  const pascalName = `S${componentName.replace(/\s+/g, "")}`;
-  const componentDir = join(COMPONENTS_DIR, category, pascalName);
-
-  // Create directory structure
-  await mkdir(componentDir, { recursive: true });
-
-  // Save index.vue
-  await writeFile(join(componentDir, "index.vue"), generated.vueComponent);
-
-  // Save markdown documentation
-  await writeFile(
-    join(componentDir, `${componentName.toLowerCase()}.md`),
-    markdown
-  );
-
-  // Save test file
-  await writeFile(
-    join(componentDir, `${pascalName}.test.ts`),
-    generated.testFile
-  );
-
-  console.log(`✓ Generated ${pascalName} component`);
 }
 
 /**
@@ -455,7 +397,7 @@ async function main() {
     // Verify API key works
     console.log("Verifying API key...");
     try {
-      const meResponse = await fetch(`${CURSOR_API_BASE}/me`, {
+      const meResponse = await fetchWithRetry(`${CURSOR_API_BASE}/me`, {
         headers: {
           Authorization: `Bearer ${CURSOR_API_KEY}`,
         },
@@ -488,57 +430,84 @@ async function main() {
     }
 
     // Fetch list of components
-    const components = await fetchComponentsList();
+    let components = await fetchComponentsList();
 
     if (components.length === 0) {
       console.log("⚠️  No components found in the documentation");
       return;
     }
 
+    // Filter components if specified
+    if (componentsFilter) {
+      const filterPairs = componentsFilter.split(",").map((pair) => {
+        const [category, name] = pair.trim().split("/");
+        return { category, name };
+      });
+
+      components = components.filter((component) =>
+        filterPairs.some(
+          (filter) =>
+            filter.category === component.category &&
+            filter.name === component.name
+        )
+      );
+
+      console.log(
+        `\n🔍 Filtering to ${components.length} specified components...\n`
+      );
+
+      if (components.length === 0) {
+        console.log("⚠️  No matching components found");
+        return;
+      }
+    }
+
     console.log(
-      `\n📦 Processing ${components.length} components with Cursor AI...\n`
+      `\n🚀 Launching ${components.length} Cursor AI agents in parallel...\n`
     );
 
-    // Process each component
-    let successCount = 0;
-    let failCount = 0;
-
-    for (const componentDef of components) {
+    // Launch all agents in parallel
+    const agentPromises = components.map(async (componentDef) => {
       try {
-        console.log(`\n📝 Processing ${componentDef.name}...`);
+        console.log(`📝 Launching agent for ${componentDef.name}...`);
 
         // Fetch markdown
-        console.log(`  → Fetching documentation...`);
         const markdown = await fetchComponentMarkdown(componentDef.markdownUrl);
 
-        // Generate with Cursor agent
-        const generated = await generateWithCursorAgent(
+        // Generate with Cursor agent (returns immediately)
+        const agentId = await generateWithCursorAgent(
           componentDef.name,
           componentDef.category,
           markdown
         );
 
-        // Save component
-        await saveComponent(
-          componentDef.name,
-          componentDef.category,
-          markdown,
-          generated
-        );
+        // Wait before launching the next agent
+        await new Promise((resolve) => setTimeout(resolve, 2_000));
 
-        successCount++;
+        return { success: true, component: componentDef.name, agentId };
       } catch (error) {
-        console.error(`  ✗ Failed to process ${componentDef.name}:`, error);
-        failCount++;
+        console.error(
+          `  ✗ Failed to launch agent for ${componentDef.name}:`,
+          error
+        );
+        return { success: false, component: componentDef.name, error };
       }
-    }
+    });
+
+    // Wait for all agents to be launched
+    const results = await Promise.all(agentPromises);
+
+    const successCount = results.filter((r) => r.success).length;
+    const failCount = results.filter((r) => !r.success).length;
 
     console.log("\n" + "=".repeat(50));
-    console.log("✨ Component generation complete!");
-    console.log(`✓ Successfully generated: ${successCount} components`);
+    console.log("✨ All agents launched!");
+    console.log(`✓ Successfully launched: ${successCount} agents`);
     if (failCount > 0) {
-      console.log(`✗ Failed: ${failCount} components`);
+      console.log(`✗ Failed to launch: ${failCount} agents`);
     }
+    console.log("\nAgents are running in the background.");
+    console.log("Check your Cursor dashboard to monitor progress.");
     console.log("=".repeat(50) + "\n");
   } catch (error) {
     console.error("❌ Error:", error);

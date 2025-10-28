@@ -20,7 +20,7 @@ bun install
 
 ### Using Components
 
-Import and use Polaris components in your Vue application:
+After generating components, import and use Polaris components in your Vue application:
 
 ```vue
 <script setup lang="ts">
@@ -49,6 +49,8 @@ const handleClick = () => {
   </div>
 </template>
 ```
+
+**Note**: Components must be generated first using `bun run generate` before they can be used.
 
 ## 🤖 Component Generation
 
@@ -103,7 +105,7 @@ src/components/
 
 ### Manual Component Creation
 
-You can also manually create components following the same structure. See `src/components/actions/SButton/index.vue` for an example.
+You can also manually create components following the same structure. After running the generator, generated components serve as examples of the pattern.
 
 ## 🧪 Testing
 

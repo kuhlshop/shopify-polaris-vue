@@ -87,7 +87,7 @@ For the Button component from Polaris:
 - Source: `https://shopify.dev/docs/api/app-home/polaris-web-components/actions/button.md`
 - Generated as: `src/components/actions/SButton/index.vue`
 - Documentation saved: `src/components/actions/SButton/button.md`
-- Tests: `src/components/actions/SButton/tests/SButton.test.ts`
+- Tests: `src/components/actions/SButton/SButton.test.ts`
 
 ## Running Tests
 
@@ -207,11 +207,21 @@ Retrieves the conversation history containing the agent's response with the gene
 
 ### Rate Limiting
 
-The script automatically handles rate limiting:
+The script implements both proactive and reactive rate limiting:
+
+**Proactive Rate Limiting (20 requests/minute)**:
+
+- Automatically tracks all Cursor API requests in a 60-second sliding window
+- Throttles requests before they're sent to stay under the 20/min limit
+- Prevents 429 errors by spacing out API calls appropriately
+
+**Reactive Rate Limiting**:
 
 - Respects `Retry-After` header when present
 - Falls back to exponential backoff
 - Maximum 3 retry attempts per request
+
+This dual approach ensures your script never hits rate limits while maintaining optimal performance.
 
 ### Expected Agent Output
 
