@@ -1,0 +1,14 @@
+<template>
+  <s-tooltip>
+    <slot />
+  </s-tooltip>
+</template>
+
+<script setup lang="ts">
+// Props interface
+interface Props {
+  id?: string;
+}
+
+defineProps<Props>();
+</script>
