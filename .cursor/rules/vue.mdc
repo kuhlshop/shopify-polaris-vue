@@ -1,0 +1,7 @@
+---
+alwaysApply: true
+---
+
+- Component order: template, script, style
+- Component name: PascalCase
+- Definition orders: props, emits, setup, computed, lifecycle, methods, watch
